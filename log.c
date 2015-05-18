@@ -1,3 +1,27 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) [2015] [liangchengming]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include "log.h"
 #include<stdarg.h>
 #include<time.h>
@@ -5,6 +29,9 @@
 #include<stdlib.h>
 #include<unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define CON_COLOR       "\033[34m"
 #define LOCATION_COLOR  "\033[34;1m"
@@ -44,10 +71,12 @@ void log_daily_rotate(int _hour, int _min, int _reqs_precheck) {
 	setting.hour  = _hour;
 	setting.min   = _min;
 	setting.preck = _reqs_precheck;
+	setting.cnt = 0;
 }
 
 
-inline void _now(char* buf, int len, const char* fmt) {
+void _now(char* buf, int len, const char* fmt) {
+	check(buf != NULL);
 	time_t t=time(NULL);
 	strftime (buf, len, fmt, localtime(&t));
 }
@@ -66,6 +95,7 @@ int logrotate() {
 		if(rename(setting.filename, newName)) {
 			printf("checking[%d]\n", t->tm_min);
 			perror(newName);
+			while(!cas_free);
 			return -1;
 		}
 		free(newName);
@@ -95,7 +125,7 @@ void log_init(const char* _filename, int options) {
 	setting.hour = -1;
 }
 
-inline const char* getpromote(int level) {
+const char* getpromote(int level) {
 	switch(level) {
 	case LOG_INFO:
 		return LEVEL[0];
@@ -111,10 +141,11 @@ inline const char* getpromote(int level) {
 	return NULL; /* should not be here */
 }
 
-inline void get_prefix(char* prefix, int len, const char* file, int line, int level) {
+void get_prefix(char* prefix, int len, const char* file, int line, int level) {
 	memset(prefix, 0x0, len);
 	char now[20];
-	_now(now, 19, "%Y-%m-%d %H:%M:%S");
+	memset(now, 0, 20);
+	_now(now, 20, "%Y-%m-%d %H:%M:%S");
 	snprintf(prefix, len-1, "[%s] %s [%s +%d] ", now, getpromote(level), file, line);
 }
 
@@ -125,10 +156,20 @@ void logger_impl(int level, const char* file, int line, const char* fmt, ...) {
 
 	va_list vars;
 	va_start(vars, fmt);
-	char* buf = (char*)calloc(1, sizeof(char)*4096);
+	char _buf[2048];
+	memset(_buf,0,2048);
 
-	if (CHECK_FLAG(setting.options, LOG_DAILY_ROTATE) && setting.cnt%setting.preck== 0) {
+	if (CHECK_FLAG(setting.options, LOG_DAILY_ROTATE) &&
+		setting.cnt != 0 && setting.cnt%setting.preck== 0) {
 		logrotate();
+	}
+
+	int used = sprintf(_buf, "%s", prefix);
+	vsprintf(_buf+used, fmt, vars);
+	va_end(vars);
+
+	if (CHECK_FLAG(setting.options, LOG_CONSOLE)) {
+		fprintf(stderr, "%s", _buf);
 	}
 
 	while(!cas_try); /* enter critical */
@@ -138,24 +179,16 @@ void logger_impl(int level, const char* file, int line, const char* fmt, ...) {
 		perror(setting.filename);
 		return;
 	}
-	int used = sprintf(buf, "%s", prefix);
-	vsprintf(buf+used, fmt, vars);
-	va_end(vars);
-
-	fprintf(f, "%s", buf);
-
-	if (CHECK_FLAG(setting.options, LOG_CONSOLE)) {
-		fprintf(stderr, "%s", buf);
-	}
+	fprintf(f, "%s", _buf);
+	fclose(f);
 
 	setting.cnt += 1;
-
 	while(!cas_free); /* leave critical */
 
-	free(buf);
-	fclose(f);
-	
 }
 
+#ifdef __cplusplus
+}
+#endif
 
 
